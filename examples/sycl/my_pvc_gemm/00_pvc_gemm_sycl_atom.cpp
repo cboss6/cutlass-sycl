@@ -24,6 +24,7 @@
 #include "helper.h"
 #include "sycl_common.hpp"
 
+// using namespace sycl;
 using namespace cute;
 
 // Command line options parsing
@@ -102,7 +103,11 @@ struct MySYCLExampleRunner {
   using ElementAcc = ElementAccumulator;
 
   using ElementC = ElementAccumulator;
+  using ElementD = ElementOutput;
+  // using ElementOutput = typename CollectiveEpilogue::ElementOutput;
   using ElementCompute = ElementComputeEpilogue;
+  // using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
+  // using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
   using ProblemShapeType = Shape<int, int, int, int>;
 
   // Workgroup-level tile
@@ -112,6 +117,7 @@ struct MySYCLExampleRunner {
   using GmemTiledCopyB = XE_2D_U16x32x32_LD_V;
   static constexpr int PipelineStages = 2;
   using DispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16<PipelineStages>;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
   using TiledMma = typename TiledMMAHelper<
       MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
       Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
@@ -132,6 +138,37 @@ struct MySYCLExampleRunner {
   using Copy_B = decltype(make_tiled_copy(
       atom_load_B{}, Layout<CopyThreadShape>{}, val_layout_load_B{}));
 
+  // For epilogue
+  using GmemTiledCopyC = XE_2D_U32x8x16_LD_N;
+  using GmemTiledCopyD = XE_2D_U32x8x16_ST_N;
+  using CopyOpG2R = XE_2D_U32x8x16_LD_N;
+  using CopyOpR2G = XE_2D_U32x8x16_ST_N;
+  using Trait_C = Copy_Traits<GmemTiledCopyC, StrideC>;
+  using val_layout_load_C = decltype(make_layout(
+      shape_div(typename Trait_C::BlockShape{}, CopyThreadShape{})));
+  using XE_Copy_C =
+      decltype(make_tiled_copy(Copy_Atom<Trait_C, ElementC>{},
+                               Layout<CopyThreadShape>{}, val_layout_load_C{}));
+
+  using Trait_D = Copy_Traits<GmemTiledCopyD, StrideD>;
+  using val_layout_store_D = decltype(make_layout(
+      shape_div(typename Trait_D::BlockShape{}, CopyThreadShape{})));
+  using XE_Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementD>{},
+                                             Layout<CopyThreadShape>{},
+                                             val_layout_store_D{}));
+  constexpr static bool is_source_supported = not cute::is_void_v<ElementC>;
+  constexpr static bool is_destination_supported =
+      not cute::is_void_v<ElementD> && not cute::is_void_v<CopyOpR2G>;
+
+  constexpr static bool is_m_major_C =
+      cutlass::epilogue::collective::detail::is_m_major<StrideC>();
+  constexpr static bool is_m_major_D =
+      cutlass::epilogue::collective::detail::is_m_major<StrideD>();
+  //
+  // Data members
+  //
+
+  /// Initialization
   StrideA stride_A;
   StrideB stride_B;
   StrideC stride_C;
@@ -149,11 +186,35 @@ struct MySYCLExampleRunner {
     Copy_B tiled_copy_b;
   };
 
+  using ElementScalar = ElementAccumulator;
+  struct EpilogueArguments {
+    // typename FusionCallbacks::Arguments thread{};
+    struct {
+      ElementScalar alpha;
+      ElementScalar beta;
+    } thread;
+    ElementC const *ptr_C;
+    StrideC dC;
+    ElementD *ptr_D;
+    StrideD dD;
+  };
+
+  // Device side epilogue params
+  struct EpilogueParams {
+    // typename FusionCallbacks::Params thread{};
+    struct {
+      ElementScalar alpha;
+      ElementScalar beta;
+    } thread;
+    XE_Copy_C xe_load_c;
+    XE_Copy_D xe_store_d;
+  };
+
   struct Arguments {
     cutlass::gemm::GemmUniversalMode mode{};
     ProblemShapeType problem_shape{};
     MainloopParams mainloop{};
-    int epilogue;
+    EpilogueArguments epilogue{};
     cutlass::KernelHardwareInfo hw_info{};
     TileSchedulerParams scheduler{};
   };
@@ -162,7 +223,7 @@ struct MySYCLExampleRunner {
     cutlass::gemm::GemmUniversalMode mode{};
     ProblemShapeType problem_shape{};
     MainloopParams mainloop{};
-    int epilogue;
+    EpilogueParams epilogue{};
     cutlass::KernelHardwareInfo hw_info{};
     TileSchedulerParams scheduler{};
   };
@@ -236,53 +297,27 @@ struct MySYCLExampleRunner {
               ElementCompute alpha, ElementCompute beta) {
     auto [M, N, K, L] = problem_size;
 
-    std::size_t sizeA = std::size_t(M) * K * L;
-    std::size_t sizeB = std::size_t(K) * N * L;
-    std::size_t sizeC = std::size_t(M) * N * L;
-    std::size_t sizeD = sizeC;
+    cutlass::TensorRef ref_A(mem.block_A, LayoutA::packed({M, K}));
+    cutlass::TensorRef ref_B(mem.block_B, LayoutB::packed({K, N}));
+    cutlass::TensorRef ref_C(mem.block_C, LayoutC::packed({M, N}));
+    cutlass::TensorRef ref_D(mem.block_ref_D, LayoutD::packed({M, N}));
 
-    std::vector<ElementA> host_A(sizeA);
-    std::vector<ElementB> host_B(sizeB);
-    std::vector<ElementC> host_C(sizeC);
-    std::vector<ElementOutput> host_D(sizeD);
-    std::vector<ElementOutput> host_ref_D(sizeD);
+    cutlass::reference::device::GemmComplex(
+        {M, N, K}, alpha, ref_A, cutlass::ComplexTransform::kNone, ref_B,
+        cutlass::ComplexTransform::kNone, beta, ref_C, ref_D,
+        ElementAccumulator(0),
+        L,     // batch_count
+        M * K, // batch_stride_A
+        K * N, // batch_stride_B
+        M * N, // batch_stride_C
+        M * N  // batch_stride_D
+    );
 
-    mem.q.memcpy(host_A.data(), mem.block_A, sizeof(ElementA) * sizeA);
-    mem.q.memcpy(host_B.data(), mem.block_B, sizeof(ElementB) * sizeB);
-    mem.q.memcpy(host_C.data(), mem.block_C, sizeof(ElementC) * sizeC);
-    mem.q.memcpy(host_D.data(), mem.block_D, sizeof(ElementOutput) * sizeD);
-    mem.q.wait();
+    // Check if output from CUTLASS kernel and reference kernel are equal or not
+    bool passed = cutlass::reference::device::BlockCompareEqual(
+        mem.block_ref_D, mem.block_D, M * N * L);
 
-    for (int l = 0; l < L; ++l) {
-      std::size_t offA = std::size_t(l) * M * K;
-      std::size_t offB = std::size_t(l) * K * N;
-      std::size_t offC = std::size_t(l) * M * N;
-      std::size_t offD = std::size_t(l) * M * N;
-
-      for (int m = 0; m < M; ++m) {
-        for (int n = 0; n < N; ++n) {
-          ElementAccumulator acc = ElementAccumulator(0);
-          for (int k = 0; k < K; ++k) {
-            acc += ElementAccumulator(host_A[offA + m * K + k]) *
-                   ElementAccumulator(host_B[offB + k * N + n]);
-          }
-
-          host_ref_D[offD + m * N + n] =
-              ElementOutput(alpha * acc + beta * ElementAccumulator(
-                                                     host_C[offC + m * N + n]));
-        }
-      }
-    }
-
-    for (std::size_t i = 0; i < sizeD; ++i) {
-      if (host_ref_D[i] != host_D[i]) {
-        std::cout << "host_ref_D[" << i << "] != host_D[" << i << "]"
-                  << std::endl;
-        return false;
-      }
-    }
-
-    return true;
+    return passed;
   }
 
   /// Initialize operands to be used in the GEMM and reference GEMM
@@ -387,6 +422,52 @@ struct MySYCLExampleRunner {
                         // xe_mma_mixed_input.hpp
         K, thread_idx,
         {params.mainloop.tiled_copy_a, params.mainloop.tiled_copy_b});
+
+    using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<
+        ElementOutput, ElementComputeEpilogue, ElementAccumulator,
+        ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+    using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<
+        EpilogueDispatchPolicy, EpilogueOp, TileShape,
+        decltype(tile_shape(TiledMma()))>;
+    using CollectiveEpilogue =
+        cutlass::epilogue::collective::CollectiveEpilogue<
+            EpilogueDispatchPolicy, TileShape, ElementAccumulator,
+            cutlass::gemm::TagToStrideC_t<LayoutC>, ElementOutput,
+            cutlass::gemm::TagToStrideC_t<LayoutD>, FusionCallBacks,
+            XE_2D_U32x8x16_LD_N, void, void, XE_2D_U32x8x16_ST_N, void, void>;
+
+    ElementScalar alpha = ElementScalar(1);
+    ElementScalar beta = ElementScalar(0);
+    ElementScalar const *alpha_ptr = nullptr;
+    ElementScalar const *beta_ptr = nullptr;
+
+    using StrideAlpha = Stride<_0, _0, int64_t>;
+    using StrideBeta = Stride<_0, _0, int64_t>;
+    StrideAlpha dAlpha = {_0{}, _0{}, 0};
+    StrideBeta dBeta = {_0{}, _0{}, 0};
+
+    CollectiveEpilogue::Params epilogue_params{
+        {
+            // ternary op : beta * C + (alpha * acc)
+            {{beta}, {beta_ptr}, {dBeta}}, // leaf args : beta
+            {},                            // leaf args : C
+            {
+                // binary op : alpha * acc
+                {{alpha}, {alpha_ptr}, {dAlpha}}, // leaf args : alpha
+                {},                               // leaf args : acc
+                {}                                // binary args : multiplies
+            },                                    // end binary op
+            {}                                    // ternary args : multiply_add
+        },
+        params.epilogue.xe_load_c,
+        params.epilogue.xe_store_d};
+
+    CollectiveEpilogue epilogue{epilogue_params, {}};
+
+    epilogue(
+        problem_shape_MNKL,
+        subgroup_shape, // TODO(codeplay): Inconsistency here w/ blk_coord_mnkl
+        blk_coord_mnkl, accumulators, tiled_mma, thread_idx);
   }
 
   cutlass::Status run_sycl(const Options &options,
@@ -433,6 +514,26 @@ struct MySYCLExampleRunner {
     params.problem_shape = problem_size;
     params.mainloop.tiled_copy_a = tiled_copy_a;
     params.mainloop.tiled_copy_b = tiled_copy_b;
+
+    // Epilogue
+    XE_Copy_C xe_load_c = {};
+    if constexpr (is_source_supported) {
+      auto mC = make_tensor(make_gmem_ptr(mem.block_C),
+                            make_layout(make_shape(M, N, L), stride_C));
+      xe_load_c = {xe_load_c.with(mC)};
+    }
+
+    XE_Copy_D xe_store_d = {};
+    if constexpr (is_destination_supported) {
+      auto mD = make_tensor(make_gmem_ptr(mem.block_D),
+                            make_layout(make_shape(M, N, L), stride_D));
+      xe_store_d = {xe_store_d.with(mD)};
+    }
+
+    params.epilogue.thread.alpha = options.alpha;
+    params.epilogue.thread.beta = options.beta;
+    params.epilogue.xe_load_c = xe_load_c;
+    params.epilogue.xe_store_d = xe_store_d;
 
     TileSchedulerParams scheduler = TileScheduler::to_underlying_arguments(
         problem_size, TileShape{}, ClusterShape{}, hw_info,

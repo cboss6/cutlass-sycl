@@ -42,6 +42,29 @@
 namespace cute
 {
 
+#define DEBUG
+#ifdef DEBUG
+  #define DBG_(var) print(var)
+  #define DBG(format, ...) printf(format, ##__VA_ARGS__)
+  #define DBG_IF(cond, format, ...) if (cond) { printf(format, ##__VA_ARGS__); }
+#else
+  #define DBG_(var)
+  #define DBG(format, ...)
+  #define DBG_IF(cond, format, ...)
+#endif
+
+#ifdef DEBUG
+  #define DBG_TENSOR(tensor) cute::print_tensor(tensor)
+  #define DBG_TENSOR_IF(cond, tensor) if (cond) { cute::print_tensor(tensor); }
+  #define DBG_LAYOUT(layout) cute::print_layout(layout)
+  #define DBG_LAYOUT_IF(cond, layout) if (cond) { cute::print_layout(layout); }
+#else
+  #define DBG_TENSOR(tensor)
+  #define DBG_TENSOR_IF(cond, tensor)
+  #define DBG_LAYOUT(layout)
+  #define DBG_LAYOUT_IF(cond, layout)
+#endif
+
 /******************************************************************************
  * Debug and logging macros
  ******************************************************************************/

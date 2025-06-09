@@ -244,7 +244,7 @@ pretty_print(uint64_t v) {
 
 CUTE_HOST_DEVICE void
 pretty_print(float v) {
-  printf("%*.2e", 10, v);
+  printf("%*.2f", 10, v);
 }
 
 CUTE_HOST_DEVICE void

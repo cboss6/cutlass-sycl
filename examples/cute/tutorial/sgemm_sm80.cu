@@ -344,6 +344,13 @@ gemm_tn(int m, int n, int k,
   auto dA = make_stride(ldA, Int<1>{});                      // (dM, dK)
   auto dB = make_stride(ldB, Int<1>{});                      // (dN, dK)
   auto dC = make_stride(Int<1>{}, ldC);                      // (dM, dN)
+  DBG("dA is: ");
+  DBG_(dA); DBG("\n");
+  DBG("dB is: ");
+  DBG_(dB); DBG("\n");
+  DBG("dC is: ");
+  DBG_(dC); DBG("\n");
+
 
   // Define CTA tile sizes (static)
   auto bM = Int<128>{};
@@ -357,10 +364,18 @@ gemm_tn(int m, int n, int k,
   auto swizzle_atom = composition(Swizzle<3,3,3>{},
                                   Layout<Shape <_8,Shape <_8, _8>>,
                                          Stride<_8,Stride<_1,_64>>>{});
+  DBG("swizzle_atom is: ");
+  DBG_(swizzle_atom); DBG("\n");
 
   auto sA = tile_to_shape(swizzle_atom, make_shape(bM,bK,bP));
   auto sB = tile_to_shape(swizzle_atom, make_shape(bN,bK,bP));
   auto sC = make_layout(make_shape(bM, bN));
+  DBG("sA is: ");
+  DBG_(sA); DBG("\n");
+  DBG("sB is: ");
+  DBG_(sB); DBG("\n");
+  DBG("sC is: ");
+  DBG_(sC); DBG("\n");
 
   // Define the thread layouts (static)
 
@@ -370,10 +385,16 @@ gemm_tn(int m, int n, int k,
   TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, cute::half_t>{},
                                     Layout<Shape<_16,_8>,Stride<_8,_1>>{},  // Thr layout 16x8 k-major
                                     Layout<Shape< _1,_8>>{});               // Val layout  1x8 n-major
+  DBG("copyA is: ");
+  DBG_(copyA); DBG("\n");
+  DBG("copyB is: ");
+  DBG_(copyB); DBG("\n");
 
   TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F16F16F16F16_TN{},
                                  Layout<Shape<_2,_2>>{},    // 2x2x1 MMA Atoms
                                  Tile<_32,_32,_16>{});      // 32x32x16 Tiled MMA for LDSM
+  DBG("mmaC is: ");
+  DBG_(mmaC); DBG("\n");
 
   //Copy_Atom<DefaultCopy, half_t> s2r_atom_A;
   //Copy_Atom<UniversalCopy<half_t>, half_t> s2r_atom_A;
@@ -394,9 +415,9 @@ gemm_tn(int m, int n, int k,
 #endif
 
 #if 0
-  print_latex(copyA);
+  // print_latex(copyA);
   print_latex(copyB);
-  print_latex(mmaC);
+  // print_latex(mmaC);
 #endif
 
   int smem_size = int(sizeof(SharedStorage<cute::half_t, cute::half_t, decltype(sA), decltype(sB)>));
@@ -620,22 +641,27 @@ int main(int argc, char** argv)
             << ")" << std::endl;
 
   int m = 5120;
+  // int m = 128;
   if (argc >= 2)
     sscanf(argv[1], "%d", &m);
 
   int n = 5120;
+  // int n = 128;
   if (argc >= 3)
     sscanf(argv[2], "%d", &n);
 
   int k = 4096;
+  // int k = 64;
   if (argc >= 4)
     sscanf(argv[3], "%d", &k);
 
-  char transA = 'N';
+  // char transA = 'N';
+  char transA = 'T';
   if (argc >= 5)
     sscanf(argv[4], "%c", &transA);
 
-  char transB = 'T';
+  // char transB = 'T';
+  char transB = 'N';
   if (argc >= 6)
     sscanf(argv[5], "%c", &transB);
 
@@ -659,6 +685,8 @@ int main(int argc, char** argv)
   for (int j = 0; j < m*k; ++j) h_A[j] = static_cast<TA>( 2*(rand() / double(RAND_MAX)) - 1 );
   for (int j = 0; j < n*k; ++j) h_B[j] = static_cast<TB>( 2*(rand() / double(RAND_MAX)) - 1 );
   for (int j = 0; j < m*n; ++j) h_C[j] = static_cast<TC>(-1);
+  // for (int j = 0; j < m*k; ++j) h_A[j] = static_cast<TA>(j);
+  // for (int j = 0; j < n*k; ++j) h_B[j] = static_cast<TB>(j);
 
   thrust::device_vector<TA> d_A = h_A;
   thrust::device_vector<TB> d_B = h_B;
@@ -694,7 +722,7 @@ int main(int argc, char** argv)
        d_A.data().get(), ldA,
        d_B.data().get(), ldB,
        beta,
-       d_C.data().get(), ldC);
+       d_C.data().get(), ldC);       
   CUTE_CHECK_LAST();
   thrust::host_vector<TC> cute_result = d_C;
 

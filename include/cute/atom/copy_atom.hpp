@@ -486,11 +486,13 @@ make_tiled_copy(Copy_Atom<Args...> const& copy_atom,
   auto tiler = product_each(shape(layout_mn));
 
 #if 0
-  print("thr_layout: "); print(thr_layout); print("\n");
-  print("val_layout: "); print(val_layout); print("\n");
-  print("layout_mn : "); print(layout_mn);  print("\n");
-  print("layout_tv : "); print(layout_tv);  print("\n");
-  print("tiler     : "); print(tiler);      print("\n");
+  if (thread0()) {
+    print("thr_layout: "); print(thr_layout); print("\n");
+    print("val_layout: "); print(val_layout); print("\n");
+    print("layout_mn : "); print(layout_mn);  print("\n");
+    print("layout_tv : "); print(layout_tv);  print("\n");
+    print("tiler     : "); print(tiler);      print("\n");
+  }
 #endif
 
   return make_tiled_copy_impl(copy_atom, layout_tv, tiler);

@@ -254,7 +254,7 @@ __device__ void loadtileC(MMAarguments &arg, ElementOutput *C) {
 
     if (test0 && test1 && test2 && test3) {
       if(threadIdx.x < 10) {
-      printf("LoadtileC: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
+      DBG("LoadtileC: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
              dst_shared=C[%d], src_global=arg.C[%d] and bytes=16\n", threadIdx.x, blockIdx.x, blockIdx.y, i, tileIdx,
              tileIdx, rowC_0 * arg.problem_size.n() + colC_0);
       }
@@ -334,7 +334,7 @@ __device__ void loadtileA(MMAarguments &arg, ElementInputA *A, int idx) {
 
     if (test0 && test1 && test2 && test3) {
       if(threadIdx.x < 10) {
-      printf("LoadtileA: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
+      DBG("LoadtileA: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
              dst_shared=A[%d], src_global=arg.A[%d] and bytes=16\n", threadIdx.x, blockIdx.x, blockIdx.y, i, tileIdx,
              tileIdx, rowA_0 * arg.problem_size.k() + colA_0);
       }
@@ -379,7 +379,7 @@ __device__ void loadtileB(MMAarguments &arg, ElementInputB *B, int idx) {
 
     if (test0 && test1 && test2 && test3) {
       if(threadIdx.x < 10) {
-      printf("LoadtileB: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
+      DBG("LoadtileB: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
              dst_shared=B[%d], src_global=arg.B[%d] and bytes=16\n", threadIdx.x, blockIdx.x, blockIdx.y, i, tileIdx,
              tileIdx, colB_0 * arg.problem_size.k() + rowB_0);
       }
@@ -424,7 +424,7 @@ __device__ void storetile(MMAarguments &arg, ElementOutput *D) {
 
     if (test0 && test1 && test2 && test3) {
       if(threadIdx.x < 10) {
-      printf("Storetile: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
+      DBG("Storetile: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, i=%d, tileIdx=%d \
              dst_shared=arg.D[rowD_0 * arg.problem_size.n() + colD_0=%d], src_global=D[tileIdx=%d] and bytes=16\n", threadIdx.x, blockIdx.x, blockIdx.y, i, tileIdx,
             rowD_0 * arg.problem_size.n() + colD_0, tileIdx);
       }
@@ -484,7 +484,7 @@ __device__ void mma_tile(MMAarguments &arg, ElementInputA *A, ElementInputB *B,
   const int rowwarp = warpidx / 2;
   const int colwarp = warpidx % 2;
   const int laneidx = threadIdx.x % 32;
-  // printf("mma_tile: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, rowwarp=warpidx / 2=%d, colwarp=warpidx % 2=%d, laneidx=threadIdx.x % 32=%d\n", threadIdx.x, blockIdx.x, blockIdx.y, rowwarp, colwarp, laneidx);
+  // DBG("mma_tile: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, rowwarp=warpidx / 2=%d, colwarp=warpidx % 2=%d, laneidx=threadIdx.x % 32=%d\n", threadIdx.x, blockIdx.x, blockIdx.y, rowwarp, colwarp, laneidx);
 
   int a[4], b[2], cd[4];
 
@@ -505,7 +505,7 @@ __device__ void mma_tile(MMAarguments &arg, ElementInputA *A, ElementInputB *B,
     b[0] = (colwarp * 32 + coltile * N + laneidx / 4) * K + laneidx % 4;
     b[1] = b[0] + 4;
     if(threadIdx.x < 10) {
-    printf("mma_tile: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, warpidx=%d, rowwarp=warpidx / 2=%d, colwarp=warpidx % 2=%d, laneidx=threadIdx.x % 32=%d tileidx=%d, rowtile=%d, coltile=%d, "
+    DBG("mma_tile: threadIdx.x=%d, blockIdx.x=%d, blockIdx.y=%d, warpidx=%d, rowwarp=warpidx / 2=%d, colwarp=warpidx % 2=%d, laneidx=threadIdx.x % 32=%d tileidx=%d, rowtile=%d, coltile=%d, "
            "a[0]=(rowwarp * 64 + rowtile * M + laneidx / 4) * K + laneidx \% 4=%d, a[1]=a[0] + 8 * K=%d, a[2]=a[0] + 4=%d, a[3]=a[1] + 4=%d, b[0]=(colwarp * 32 + coltile * N + laneidx / 4) * K + laneidx \% 4=%d, b[1]=b[0] + 4=%d, cd[0]=%d, cd[1]=cd[0] + 1=%d, cd[2]=cd[0] + 8 * 64=%d, cd[3]=cd[2] + 1=%d\n", threadIdx.x, blockIdx.x, blockIdx.y, warpidx, rowwarp, colwarp, laneidx, tileidx, rowtile, coltile,
            a[0], a[1], a[2], a[3], b[0], b[1], cd[0], cd[1], cd[2], cd[3]);
     }
@@ -575,11 +575,11 @@ __global__ void GEMM_MMA(MMAarguments arg) {
   __shared__ ElementInputB tileB[8 * 64];
   __shared__ ElementOutput tileC[128 * 64];
 
-  // printf("GEMM_MMA: tidx=%d, bidx.x=%d, bidx.y=%d\n", threadIdx.x, blockIdx.x, blockIdx.y);
+  // DBG("GEMM_MMA: tidx=%d, bidx.x=%d, bidx.y=%d\n", threadIdx.x, blockIdx.x, blockIdx.y);
 
   const int iters = (arg.problem_size.k() + K - 1) / K;
   if (cutlass::thread0())
-    printf("GEMM_MMA: iters=%d while k=%d and K=%d\n", iters, arg.problem_size.k(), K);
+    DBG("GEMM_MMA: iters=%d while k=%d and K=%d\n", iters, arg.problem_size.k(), K);
   loadtileC(arg, tileC);
 
   for (int i = 0; i < iters; i++) {
@@ -599,7 +599,7 @@ void launch_GEMM_MMA(MMAarguments &arg) {
   // threadblockShape 128 64 8
   // warpShape 64 32 8
   // every block has 4 warps
-  printf("launch_GEMM_MMA: m=%d, n=%d, k=%d\n", arg.problem_size.m(), arg.problem_size.n(), arg.problem_size.k());
+  DBG("launch_GEMM_MMA: m=%d, n=%d, k=%d\n", arg.problem_size.m(), arg.problem_size.n(), arg.problem_size.k());
   
   grid.x = (arg.problem_size.n() + 64 - 1) / 64;
   grid.y = (arg.problem_size.m() + 128 - 1) / 128;
@@ -608,8 +608,8 @@ void launch_GEMM_MMA(MMAarguments &arg) {
   block.x = 128;
   block.y = 1;
   block.z = 1;
-  printf("grid.x=%d, grid.y=%d, grid.z=%d\n", grid.x, grid.y, grid.z);
-  printf("block.x=%d, block.y=%d, block.z=%d\n", block.x, block.y, block.z);
+  DBG("grid.x=%d, grid.y=%d, grid.z=%d\n", grid.x, grid.y, grid.z);
+  DBG("block.x=%d, block.y=%d, block.z=%d\n", block.x, block.y, block.z);
 
   GEMM_MMA<<<grid, block>>>(arg);
   cudaDeviceSynchronize();
@@ -680,7 +680,7 @@ int main(int argc, char **argv) {
   if (argc >= 4)
     problem_size.k() = atoi(argv[3]);
 
-  printf("[%20s] (%d,%d,%d)\n", "problem size", problem_size.m(),
+  DBG("[%20s] (%d,%d,%d)\n", "problem size", problem_size.m(),
          problem_size.n(), problem_size.k());
 
   tensor_a.resize(problem_size.mk());

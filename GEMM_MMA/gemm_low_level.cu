@@ -85,12 +85,28 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   Tensor mA = make_tensor(make_gmem_ptr(A), select<0,2>(shape_MNK), dA); // (M,K)
   Tensor mB = make_tensor(make_gmem_ptr(B), select<1,2>(shape_MNK), dB); // (N,K)
   Tensor mC = make_tensor(make_gmem_ptr(C), select<0,1>(shape_MNK), dC); // (M,N)
+  if(thread0() && block0()) {
+    DBG("mA is: ");
+    DBG_(mA); DBG("\n");
+    DBG("mB is: ");
+    DBG_(mB); DBG("\n");
+    DBG("mC is: ");
+    DBG_(mC); DBG("\n");
+  }
 
   // Get the appropriate blocks for this thread block
   auto cta_coord = make_coord(blockIdx.x, blockIdx.y, _);              // (m,n,k)
   Tensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1, X,_1>{});  // (BLK_M,BLK_K,k)
   Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step< X,_1,_1>{});  // (BLK_N,BLK_K,k)
   Tensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1,_1, X>{});  // (BLK_M,BLK_N)
+  if(thread0() && block0()) {
+    DBG("gA is: ");
+    DBG_(gA); DBG("\n");
+    DBG("gB is: ");
+    DBG_(gB); DBG("\n");
+    DBG("gC is: ");
+    DBG_(gC); DBG("\n");
+  }
 
   // Shared memory buffers
   extern __shared__ char shared_memory[];
@@ -106,10 +122,22 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   ThrCopy thr_copy_a = copy_a.get_slice(threadIdx.x);
   Tensor tAgA = thr_copy_a.partition_S(gA);                            // (CPY,CPY_M,CPY_K,k)
   Tensor tAsA = thr_copy_a.partition_D(sA);                            // (CPY,CPY_M,CPY_K,PIPE)
+  if(thread0() && block0()) {
+    DBG("tAgA is: ");
+    DBG_(tAgA); DBG("\n");
+    DBG("tAsA is: ");
+    DBG_(tAsA); DBG("\n");
+  }
 
   ThrCopy thr_copy_b = copy_b.get_slice(threadIdx.x);
   Tensor tBgB = thr_copy_b.partition_S(gB);                            // (CPY,CPY_N,CPY_K,k)
   Tensor tBsB = thr_copy_b.partition_D(sB);                            // (CPY,CPY_N,CPY_K,PIPE)
+  if(thread0() && block0()) {
+    DBG("tBgB is: ");
+    DBG_(tBgB); DBG("\n");
+    DBG("tBsB is: ");
+    DBG_(tBsB); DBG("\n");
+  }
 
   CUTE_STATIC_ASSERT_V(size<1>(tAgA) == size<1>(tAsA));                // CPY_M
   CUTE_STATIC_ASSERT_V(size<2>(tAgA) == size<2>(tAsA));                // CPY_K
@@ -121,15 +149,26 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   //
 
   auto K_PIPE_MAX = size<3>(tAsA);
+  if(thread0() && block0()) {
+    DBG("K_PIPE_MAX is: ");
+    DBG_(K_PIPE_MAX); DBG("\n");
+  }
 
   // Total count of tiles
   int k_tile_count = size<3>(tAgA);
+  if(thread0() && block0()) {
+    DBG("k_tile_count is: ");
+    DBG_(k_tile_count); DBG("\n");
+  }
   // Current tile index in gmem to read from
   int k_tile_next = 0;
 
   // Start async loads for all pipes but the last
   CUTE_UNROLL
   for (int k_pipe = 0; k_pipe < K_PIPE_MAX-1; ++k_pipe) {
+    if(thread0() && block0()) {
+      DBG("k_pipe = %d while k_tile_next = %d and k_tile_count = %d\n", k_pipe, k_tile_next, k_tile_count);
+    }
     copy(copy_a, tAgA(_,_,_,k_tile_next), tAsA(_,_,_,k_pipe));
     copy(copy_b, tBgB(_,_,_,k_tile_next), tBsB(_,_,_,k_pipe));
     cp_async_fence();
@@ -143,12 +182,26 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
   ThrMMA thr_mma = mma.get_slice(threadIdx.x);
   Tensor tCgC = thr_mma.partition_C(gC);                               // (MMA,MMA_M,MMA_N)
+  if(thread0() && block0()) {
+    DBG("tCgC is: ");
+    DBG_(tCgC); DBG("\n");
+  }
 
   // Allocate registers for pipelining
   Tensor tCrA = thr_mma.partition_fragment_A(sA(_,_,0));               // (MMA,MMA_M,MMA_K)
   Tensor tCrB = thr_mma.partition_fragment_B(sB(_,_,0));               // (MMA,MMA_N,MMA_K)
+  if(thread0() && block0()) {
+    DBG("tCrA is: ");
+    DBG_(tCrA); DBG("\n");
+    DBG("tCrB is: ");
+    DBG_(tCrB); DBG("\n");
+  }
   // Allocate the accumulators -- same size as the projected data
   Tensor tCrC = thr_mma.make_fragment_C(tCgC);                         // (MMA,MMA_M,MMA_N)
+  if(thread0() && block0()) {
+    DBG("tCrC is: ");
+    DBG_(tCrC); DBG("\n");
+  }
 
   CUTE_STATIC_ASSERT_V((  shape(tCrC) == take<0,3>(shape(tCgC))));     // (MMA,MMA_M,MMA_N)
   CUTE_STATIC_ASSERT_V((size<1>(tCgC) == size<1>(tCrA)));              // MMA_M
@@ -171,8 +224,8 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   Tensor tXsB = s2r_thr_copy_b.partition_S(sB);                        // (CPY,MMA_N,MMA_K,PIPE)
   Tensor tXrB = s2r_thr_copy_b.retile_D(tCrB);                         // (CPY,MMA_N,MMA_K)
 
-#if 0
-  if(thread0()) {
+#if 1
+  if(thread0() && block0()) {
     print("  mA : "); print(  mA); print("\n");
     print("  gA : "); print(  gA); print("\n");
     print("  sA : "); print(  sA); print("\n");
@@ -181,8 +234,8 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   }
 #endif
 
-#if 0
-  if(thread0()) {
+#if 1
+  if(thread0() && block0()) {
     print("  mB : "); print(  mB); print("\n");
     print("  gB : "); print(  gB); print("\n");
     print("  sB : "); print(  sB); print("\n");
@@ -191,8 +244,8 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   }
 #endif
 
-#if 0
-  if(thread0()) {
+#if 1
+  if(thread0() && block0()) {
     print("  mC : "); print(  mC); print("\n");
     print("  gC : "); print(  gC); print("\n");
     print("tCgC : "); print(tCgC); print("\n");
@@ -366,7 +419,7 @@ gemm_tn(int m, int n, int k,
   DBG_(sC); DBG("\n");
 
   // Define the thread layouts (static)
-
+  // SM80_CP_ASYNC_CACHEALWAYS
   TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, cute::half_t>{},
                                     Layout<Shape<_16,_8>,Stride<_8,_1>>{},  // Thr layout 16x8 k-major
                                     Layout<Shape< _1,_8>>{});               // Val layout  1x8 k-major
@@ -827,8 +880,9 @@ __device__ bool test(int a0, int b0, int a1, int b1) {
 
 // Create a tuple of problem size for matrix multiplication
 // cutlass::gemm::GemmCoord problem_size = {5120, 4096, 4096};
-cutlass::gemm::GemmCoord problem_size = {4096, 4096, 4096};
-// cutlass::gemm::GemmCoord problem_size = {128, 128, 16};
+// cutlass::gemm::GemmCoord problem_size = {4096, 4096, 4096};
+// cutlass::gemm::GemmCoord problem_size = {128, 128, 64};
+cutlass::gemm::GemmCoord problem_size = {128, 128, 16};
 // cutlass::gemm::GemmCoord problem_size = {64, 64, 16};
 
 // Initialize tensors using CUTLASS helper functions
@@ -868,52 +922,74 @@ int main(int argc, char **argv) {
     int n = problem_size.n();
 
     // My initialization of tensor_a, tensor_b and tensor_c
-    // for (int i = 0; i < m*k; i++) {
-    //     tensor_a.host_data()[i] = ElementInputA(i);
-    // }
+    for (int i = 0; i < m*k; i++) {
+        tensor_a.host_data()[i] = ElementInputA(i);
+    }
 
-    // int stride_row = 1, stride_col = k;
-    // for (int i = 0; i < k; i++) {
-    //     for (int j = 0; j < n; j++) {
-    //         tensor_b.host_data()[j * k + i] = ElementInputB(i * n + j);
-    //     }
-    // }
+    int stride_row = 1, stride_col = k;
+    for (int i = 0; i < k; i++) {
+        for (int j = 0; j < n; j++) {
+            tensor_b.host_data()[j * k + i] = ElementInputB(i * n + j);
+        }
+    }
 
     // for (int i = 0; i < m*n; i++) {
     //     tensor_c.host_data()[i] = ElementAccumulator(0.0f);
     // }
+    for (int i = 0; i < m; ++i) {
+      for (int j = 0; j < n; ++j) {
+        tensor_c.host_data()[j * m + i] = ElementAccumulator(i * n + j);
+      }
+    }
 
-    // tensor_a.sync_device();
-    // tensor_b.sync_device();
-    // tensor_c.sync_device();
+    tensor_a.sync_device();
+    tensor_b.sync_device();
+    tensor_c.sync_device();
 
-    // for (int i = 0; i < m; ++i) {
-    //     for (int j = 0; j < k; ++j) {
-    //         if (i < 10 && j < 10) {
-    //         DBG("a[%d, %d] = %f", i, j, tensor_a.at(MatrixCoord(i, j)));
-    //         }
-    //     }
-    //     DBG("\n");
-    // }
+    constexpr int print_line = 10;
+    for (int i = 0; i < m; ++i) {
+        for (int j = 0; j < k; ++j) {
+            if (i < print_line && j < print_line) {
+            DBG("a[%d, %d] = %f, ", i, j, static_cast<float>(tensor_a.at(cutlass::MatrixCoord(i, j))));
+            }
+        }
+        if (i < print_line) {
+            DBG("\n");
+        }
+    }
     
-    // for (int i = 0; i < k; ++i) {
-    //     for (int j = 0; j < n; ++j) {
-    //         if (i < 10 && j < 10) {
-    //         DBG("b[%d, %d] = %f", i, j, tensor_b.at(MatrixCoord(i, j)));
-    //         }
-    //     }
-    //     DBG("\n");
-    // }
+    for (int i = 0; i < k; ++i) {
+        for (int j = 0; j < n; ++j) {
+            if (i < print_line && j < print_line) {
+            DBG("b[%d, %d] = %f, ", i, j, static_cast<float>(tensor_b.at(cutlass::MatrixCoord(i, j))));
+            }
+        }
+        if (i < print_line) {
+            DBG("\n");
+        }
+    }
 
-    cutlass::reference::device::TensorFillRandomUniform(
-        tensor_a.device_view(), 1, ElementInputA(4.f), ElementInputA(-4.f), 0);
+    
+    for (int i = 0; i < m; ++i) {
+        for (int j = 0; j < n; ++j) {
+            if (i < print_line && j < print_line) {
+            DBG("c[%d, %d] = %f, ", i, j, static_cast<float>(tensor_c.at(cutlass::MatrixCoord(i, j))));
+            }
+        }
+        if (i < print_line) {
+            DBG("\n");
+        }
+    }
 
-    cutlass::reference::device::TensorFillRandomUniform(
-        tensor_b.device_view(), 2, ElementInputB(4.f), ElementInputB(-4.f), 0);
+    // cutlass::reference::device::TensorFillRandomUniform(
+    //     tensor_a.device_view(), 1, ElementInputA(4.f), ElementInputA(-4.f), 0);
 
-    cutlass::reference::device::TensorFillRandomUniform(
-        tensor_c.device_view(), 3, ElementAccumulator(1.f),
-        ElementAccumulator(1.f), 0);
+    // cutlass::reference::device::TensorFillRandomUniform(
+    //     tensor_b.device_view(), 2, ElementInputB(4.f), ElementInputB(-4.f), 0);
+
+    // cutlass::reference::device::TensorFillRandomUniform(
+    //     tensor_c.device_view(), 3, ElementAccumulator(1.f),
+    //     ElementAccumulator(1.f), 0);
     tensor_d_low.copy_in_device_to_device(tensor_c.device_data());
 
     // Initialize alpha and beta for dot product computation
@@ -967,6 +1043,7 @@ int main(int argc, char **argv) {
 
 
   ////////////////////cutlassMMA////////////////////////////////
+/*
 #if ENABLE_CUTLASS
     timer.bind_run("cutlassMMA", [&] {
         // Launch CUTLASS kernel
@@ -974,7 +1051,8 @@ int main(int argc, char **argv) {
     });
 #endif
     CUTLASS_CHECK(status);
-
+*/
+    // /*
     {
         // my low level api implementation
         char transA = 'T';
@@ -1043,6 +1121,7 @@ int main(int argc, char **argv) {
         cudaFree(d_B);
         cudaFree(d_C);
     }
+    // */
     
   //////////////////////GEMM_MMA///////////////////////
 //   {

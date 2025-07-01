@@ -2,10 +2,27 @@
 #include <iostream>
 // #include <cute/shape.hpp>
 #include <cute/layout.hpp>
+#include <cute/tensor.hpp>
+// #include <cute/tiled_divide.hpp>
 
 using namespace cute;
 
 int main() {
+  int* my_array;
+  cudaMalloc(&my_array, 128 * 64 * sizeof(int));
+  cudaMemset(my_array, 0, 128 * 64 * sizeof(int));
+
+  Tensor tmp = make_tensor(my_array, make_layout(make_shape(Int<128>{}, Int<64>{})));
+  Tensor tiled_tmp = tiled_divide(tmp, make_shape(Int<16>{}, Int<16>{}));
+
+  print(tiled_tmp); printf("\n");
+  printf("size<0>(tiled_tmp) = %d\n", size<0>(tiled_tmp)());
+  printf("size<1>(tiled_tmp) = %d\n", size<1>(tiled_tmp)());
+  printf("size<2>(tiled_tmp) = %d\n", size<2>(tiled_tmp)());
+
+  Tensor tmp2 = make_fragment_like(tile);
+
+  /*
   //
   // Example A: plain 2-D row-major [4,8]
   //
@@ -68,6 +85,7 @@ int main() {
                       << nested(i,j,a,b) << "\n";
     std::cout << "\n";
   }
+  */
 
   return 0;
 }
